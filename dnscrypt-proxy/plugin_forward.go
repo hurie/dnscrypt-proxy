@@ -11,13 +11,8 @@ import (
 	"github.com/miekg/dns"
 )
 
-type PluginForwardEntry struct {
-	domain  string
-	servers []string
-}
-
 type PluginForward struct {
-	forwardMap []PluginForwardEntry
+	patternMatcher *PatternMatcher
 }
 
 func (plugin *PluginForward) Name() string {
@@ -34,6 +29,7 @@ func (plugin *PluginForward) Init(proxy *Proxy) error {
 	if err != nil {
 		return err
 	}
+	plugin.patternMatcher = NewPatternPatcher()
 	for lineNo, line := range strings.Split(string(bin), "\n") {
 		line = strings.TrimFunc(line, unicode.IsSpace)
 		if len(line) == 0 || strings.HasPrefix(line, "#") {
@@ -55,9 +51,7 @@ func (plugin *PluginForward) Init(proxy *Proxy) error {
 		if len(servers) == 0 {
 			continue
 		}
-		plugin.forwardMap = append(plugin.forwardMap, PluginForwardEntry{
-			domain: domain, servers: servers,
-		})
+		plugin.patternMatcher.Add(domain, &servers, lineNo+1)
 	}
 	return nil
 }
@@ -76,18 +70,11 @@ func (plugin *PluginForward) Eval(pluginsState *PluginsState, msg *dns.Msg) erro
 		return nil
 	}
 	question := strings.ToLower(StripTrailingDot(questions[0].Name))
-	questionLen := len(question)
-	var servers []string
-	for _, candidate := range plugin.forwardMap {
-		candidateLen := len(candidate.domain)
-		if candidateLen > questionLen {
-			continue
-		}
-		if question[questionLen-candidateLen:] == candidate.domain && (candidateLen == questionLen || (question[questionLen-candidateLen-1] == '.')) {
-			servers = candidate.servers
-			break
-		}
+	_, _, xservers := plugin.patternMatcher.Eval(question)
+	if xservers == nil {
+		return nil
 	}
+	servers := *xservers.(*[]string)
 	if len(servers) == 0 {
 		return nil
 	}
